@@ -11,13 +11,25 @@ This repository records [EleutherAI](https://www.eleuther.ai)'s library for trai
 
 GPT-NeoX leverages many of the same features and technologies as the popular Megatron-DeepSpeed library but with substantially increased usability and novel optimizations. Major features include:
 * Distributed training with ZeRO and 3D parallelism
-* A wide variety of systems and hardwares, including launching via Slurm, MPI, and the IBM Job Step Manager, and has been run at scale on [AWS](https://aws.amazon.com/), [CoreWeave](https://www.coreweave.com/), [ORNL Summit](https://www.olcf.ornl.gov/summit/), [ORNL Frontier](https://www.olcf.ornl.gov/frontier/),  [LUMI](https://www.lumi-supercomputer.eu/), and others.
+* A wide variety of systems and hardwares, including launching via Slurm, MPI, and the IBM Job Step Manager, and has been run at scale on [AWS](https://aws.amazon.com/), [CoreWeave](https://www.coreweave.com/), Oak Ridge's [Summit](https://www.olcf.ornl.gov/summit/) and [Frontier](https://www.olcf.ornl.gov/frontier/),  [Pacific Northwest National Laboratory](https://hpc.pnl.gov/index.shtml), Argonne's [Polaris](https://docs.alcf.anl.gov/polaris/data-science-workflows/applications/gpt-neox/), [LUMI](https://www.lumi-supercomputer.eu/), and more.
 * Cutting edge architectural innovations including rotary and alibi positional embeddings, parallel feedforward attention layers, and flash attention.
 * Predefined configurations for popular architectures including Pythia, PaLM, Falcon, and LLaMA 1 \& 2
 * Curriculum Learning
 * Easy connections with the open source ecosystem, including Hugging Face's [tokenizers](https://github.com/huggingface/tokenizers) and [transformers](https://github.com/huggingface/transformers/) libraries, logging via [WandB](https://wandb.ai/site), and evaluation via our [Language Model Evaluation Harness](https://github.com/EleutherAI/lm-evaluation-harness).
 
 ## News
+**[9/9/2024]** We now support preference learning via [DPO](https://arxiv.org/abs/2305.18290), [KTO](https://arxiv.org/abs/2402.01306), and reward modeling
+
+**[9/9/2024]** We now support integration with [Comet ML](https://www.comet.com/site/), a machine learning monitoring platform
+
+**[5/21/2024]** We now support [RWKV](https://www.rwkv.com/) with pipeline parallelism!. See the PRs for [RWKV](https://github.com/EleutherAI/gpt-neox/pull/1198) and [RWKV+pipeline](https://github.com/EleutherAI/gpt-neox/pull/1221)
+
+**[3/21/2024]** We now support Mixture-of-Experts (MoE)
+
+**[3/17/2024]** We now support AMD MI250X GPUs
+
+**[3/15/2024]** We now support [Mamba](https://github.com/state-spaces/mamba) with tensor parallelism! See [the PR](https://github.com/EleutherAI/gpt-neox/pull/1184)
+
 **[8/10/2023]** We now support checkpointing with AWS S3! Activate with the `s3_path` config option (for more detail, see [the PR](https://github.com/EleutherAI/gpt-neox/pull/1010))
 
 **[9/20/2023]** As of https://github.com/EleutherAI/gpt-neox/pull/1035, we have deprecated Flash Attention 0.x and 1.x, and migrated support to Flash Attention 2.x. We don't believe this will cause problems, but if you have a specific use-case that requires old flash support using the latest GPT-NeoX, please raise an issue.
@@ -52,6 +64,7 @@ Prior to 3/9/2023, GPT-NeoX relied on [DeeperSpeed](https://github.com/EleutherA
     + [Containerized Setup](#containerized-setup)
   * [Usage](#usage)
 - [Configuration](#configuration)
+    * [Mixture of Experts](#mixture-of-experts)
 - [Datasets](#datasets)
   * [Preconfigured Datasets](#preconfigured-datasets)
   * [Using Custom Data](#using-custom-data)
@@ -67,6 +80,7 @@ Prior to 3/9/2023, GPT-NeoX relied on [DeeperSpeed](https://github.com/EleutherA
   * [Weights and Biases](#weights-and-biases)
   * [TensorBoard](#tensorboard)
 - [Running on multi-node](#running-on-multi-node)
+- [Profiling](#profiling)
 - [Adoption and Publications](#adoption-and-publications)
   * [Publications](#publications)
   * [Models](#models)
@@ -94,7 +108,6 @@ To install the remaining basic dependencies, run:
 pip install -r requirements/requirements.txt
 pip install -r requirements/requirements-wandb.txt # optional, if logging using WandB
 pip install -r requirements/requirements-tensorboard.txt # optional, if logging via tensorboard
-python ./megatron/fused_kernels/setup.py install # optional, if using fused kernels
 ```
 
 from the repository root.
@@ -103,6 +116,16 @@ from the repository root.
 > Our codebase relies on [DeeperSpeed](https://github.com/EleutherAI/DeeperSpeed), our fork of the [DeepSpeed](https://github.com/microsoft/DeepSpeed) library with some added changes. We strongly recommend using Anaconda, a virtual machine, or some other form of environment isolation before continuing. Failure to do so may cause other repositories that rely on DeepSpeed to break.
 
 </aside>
+
+### Fused Kernels
+We now support AMD GPUs (MI100, MI250X) through JIT fused-kernel compilation. Fused kernels will be built and loaded as needed. To avoid waiting during job launching, you can also do the following for manual pre-build:
+
+```python
+python
+from megatron.fused_kernels import load
+load()
+```
+This will automatically adapts building process over different GPU vendors (AMD, NVIDIA) without platform specific code changes. To further test fused kernels using `pytest`, use `pytest tests/model/test_fused_kernels.py`
 
 ### Flash Attention
 
@@ -321,6 +344,80 @@ These files are generally complete, but non-optimal. For example, depending on y
 
 For a more detailed guide to the features available and how to configure them, see [the configuration README](configs/README.md), and for documentation of every possible argument, see [configs/neox_arguments.md](configs/neox_arguments.md).
 
+## Mixture of Experts
+
+GPT-NeoX includes multiple expert implementations for MoE. To select between them, specify `moe_type` of `megablocks` (default) or `deepspeed`.
+
+Both are based on the DeepSpeed MoE parallelism framework, which supports tensor-expert-data parallelism.
+Both allow you to toggle between token-dropping and dropless (default, and this is what Megablocks was designed for).
+Sinkhorn routing to come soon!
+
+For an example of a basic complete configuration, see configs/125M-dmoe.yml (for Megablocks dropless) or configs/125M-moe.yml.
+
+Most MoE related configuration arguments are prefixed with `moe`. Some common configuration parameters and their defaults are as follows:
+
+```
+moe_type: megablocks
+moe_num_experts: 1 # 1 disables MoE. 8 is a reasonable value.
+moe_loss_coeff: 0.1
+expert_interval: 2 # See details below
+enable_expert_tensor_parallelism: false # See details below
+moe_expert_parallel_size: 1 # See details below
+moe_token_dropping: false
+```
+
+DeepSpeed can be further configured with the following:
+
+```
+moe_top_k: 1
+moe_min_capacity: 4
+moe_train_capacity_factor: 1.0 # Setting to 1.0
+moe_eval_capacity_factor: 1.0 # Setting to 1.0
+```
+
+One MoE layer is present every `expert_interval` transformer layers including the first, so with 12 layers total:
+
+```
+0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11
+```
+
+Experts would be in these layers:
+
+```
+0, 2, 4, 6, 8, 10
+```
+
+By default, we use expert-data parallelism, so any available tensor parallelism (`model_parallel_size`) will be used for expert routing. For instance, given the following:
+
+```
+expert_parallel_size: 4
+model_parallel_size: 2 # aka tensor parallelism
+```
+
+With 32 GPUs, the behavior will be look like:
+
+- In non-expert layers:
+  - Tensor parallelism is 2. (There are 32 / 2 = 16 such tensor parallel groups, each of size 2.)
+  - Data parallelism implicitly becomes 32 / 2 = 16.
+- In expert layers:
+  - There is no tensor parallelism.
+  - Expert parallelism is 4. (There are 32 / 4 = 8 expert parallel groups, each of size 4.)
+  - Data parallelism implicitly becomes 32 / 4 = 8.  Some cross-node token routing happens as a result of this redivision of data parallelism between 16 and 8.  To avoid it, ensure that `expert_parallel_size == model_parallel_size`.
+
+Setting `enable_expert_tensor_parallelism` enables tensor-expert-data (TED) parallelism. The way to interpret the above would then be:
+
+- In non-expert layers: same as before.
+- In expert layers:
+  - Tensor parallelism is 2. (There are 32 / 2 = 16 tensor parallel groups, each of size 2.)
+  - Expert parallelism is 4. (There are 32 / 4 = 8 expert parallel groups, each of size 4.)
+  - Data parallelism implicitly becomes 32 / (2 * 4) = 4.  Again, cross-node token routing happens.  To avoid, ensure `expert_parallel_size == 1` or `model_parallel_size == 1`.
+
+So note that DP must be divisible by (MP * EP).  For more details, see the [TED paper].
+
+Pipeline parallelism is not yet supported - coming soon!
+
+[TED paper]: https://arxiv.org/abs/2303.06318
+
 # Datasets
 
 ## Preconfigured Datasets
@@ -372,7 +469,7 @@ optional arguments:
 input data:
   --input INPUT         Path to input jsonl files or lmd archive(s) - if using multiple archives, put them in a comma separated list
   --jsonl-keys JSONL_KEYS [JSONL_KEYS ...]
-                        space separate listed of keys to extract from jsonl. Defa
+                        space separate listed of keys to extract from jsonl. Default: text
   --num-docs NUM_DOCS   Optional: Number of documents in the input data (if known) for an accurate progress bar.
 
 tokenizer:
@@ -414,7 +511,7 @@ python tools/datasets/preprocess_data.py \
 You would then run training with the following settings added to your configuration file:
 
 ```yaml
-  "data-path": "data/mydataset/mydataset",
+  "data-path": "data/mydataset_text_document",
 ```
 
 # Training and Finetuning
@@ -501,18 +598,21 @@ where `--eval_tasks` is a list of evaluation tasks followed by spaces, e.g `--ev
 
 # Exporting to Hugging Face
 
-GPT-NeoX is optimized heavily for training only, and GPT-NeoX model checkpoints are not compatible out of the box with other deep learning libraries. To make models easily loadable and shareable with end users, and for further exporting to various other frameworks, GPT-NeoX supports checkpoint conversion to the [Hugging Face Transformers](https://arxiv.org/abs/1910.03771) GPTNeoXModel format.
+GPT-NeoX is optimized heavily for training only, and GPT-NeoX model checkpoints are not compatible out of the box with other deep learning libraries. To make models easily loadable and shareable with end users, and for further exporting to various other frameworks, GPT-NeoX supports checkpoint conversion to the [Hugging Face Transformers](https://arxiv.org/abs/1910.03771) format.
 
-To convert a NeoX checkpoint (with pipeline-parallel-size>=1) to Hugging Face-loadable format, run:
-```bash
-python ./tools/ckpts/convert_module_to_hf.py --input_dir /path/to/model/global_stepXXX --config_file your_config.yml --output_dir hf_model/save/location
-```
+Though NeoX supports a number of different architectural configurations, including AliBi positional embeddings, not all of these configurations map cleanly onto the supported configurations within Hugging Face Transformers.
 
-To convert a sequential model to Hugging Face format, run:
+NeoX supports export of compatible models into the following architectures:
+- GPTNeoXForCausalLM
+- LlamaForCausalLM
+- MistralForCausalLM
+
+Training a model which does not fit into one of these Hugging Face Transformers architectures cleanly will require writing custom modeling code for the exported model.
+
+To convert a GPT-NeoX library checkpoint to Hugging Face-loadable format, run:
 ```bash
-python  ./tools/ckpts/convert_sequential_to_hf.py --input_dir /path/to/model/global_stepXXX --config_file your_config.yml --output_dir hf_model/save/location
+python ./tools/ckpts/convert_neox_to_hf.py --input_dir /path/to/model/global_stepXXX --config_file your_config.yml --output_dir hf_model/save/location --precision {auto,fp16,bf16,fp32} --architecture {neox,mistral,llama}
 ```
-(Note: this script should be used for v2.0 checkpoints saved on a v2.0 commit prior to https://github.com/EleutherAI/gpt-neox/pull/866 and which used `pipe-parallel-size=1`. Using `pipe-parallel-size=0` will also save models in this format.)
 
 Then to upload a model to [the Hugging Face Hub](https://huggingface.co/), run:
 ```bash
@@ -521,7 +621,27 @@ python ./tools/ckpts/upload.py
 ```
 and input the requested information, including HF hub user token.
 
-Note, however, that this compatibility is not one-to-one, and only certain configurations from GPT-NeoX are supported in the Hugging Face GPTNeoXModel class. Advanced features such as alternative positional embeddings may require new Transformers modeling code and new conversion script tweaks.
+### Importing Models Into GPT-NeoX
+
+NeoX supplies several utilities for converting a pretrained model checkpoint into a format that can be trained within the library.
+
+The following models or model families can be loaded in GPT-NeoX:
+- Llama 1
+- Llama 2
+- CodeLlama
+- Mistral-7b-v0.1
+
+We provide two utilities for converting from two different checkpoint formats into a format compatible with GPT-NeoX.
+
+To convert a Llama 1 or Llama 2 checkpoint distributed by Meta AI from its original file format (downloadable [here](https://github.com/facebookresearch/llama) or [here](https://huggingface.co/meta-llama/Llama-2-7b)) into the GPT-NeoX library, run
+
+```
+python tools/ckpts/convert_raw_llama_weights_to_neox.py --input_dir /path/to/model/parent/dir/7B --model_size 7B --output_dir /path/to/save/ckpt --num_output_shards <TENSOR_PARALLEL_SIZE> (--pipeline_parallel if pipeline-parallel-size >= 1)
+```
+
+
+To convert from a Hugging Face model into a NeoX-loadable, run `tools/ckpts/convert_hf_to_sequential.py`. See documentation within that file for further options.
+
 
 # Monitoring
 
@@ -535,9 +655,57 @@ EleutherAI is currently using [Weights & Biases to record our experiments](https
 
 We also support using TensorBoard via the <code><var>tensorboard-dir</var></code> field. Dependencies required for TensorBoard monitoring can be found in and installed from  `./requirements/requirements-tensorboard.txt`.
 
+## Comet ML
+
+[Comet ML](https://www.comet.com/) is a machine learning monitoring platform. To use comet to monitor your gpt-neox experiments:
+1. Create an account at https://www.comet.com/login to generate your API key. Either create a workspace or pass your default workspace in your gpt-neox config under the `comet_workspace` config arg.
+2. Once generated, link your API key at runtime by passing `export COMET_API_KEY=<your-key-here>`
+3. Install `comet_ml` and any dependency libraries via `pip install -r requirements/requirements-comet.txt`
+4. Pass `use_comet: True` and your workspace name under `comet)wor in your config. A full example config with comet enabled is provided in `configs/local_setup_comet.yml`
+5. Run your experiment, and monitor in comet workspace that you passed!
+
 # Running on multi-node
 
 If you need to supply a hostfile for use with the MPI-based DeepSpeed launcher, you can set the environment variable `DLTS_HOSTFILE` to point to the hostfile.
+
+# Profiling
+
+We support profiling with Nsight Systems, the PyTorch Profiler, and PyTorch Memory Profiling.
+
+## Nsight Systems Profiling
+
+To use the Nsight Systems profiling, set config options `profile`, `profile_step_start`, and `profile_step_stop`. Launch training with:
+
+```
+nsys profile -s none -t nvtx,cuda -o <path/to/profiling/output> --force-overwrite true \
+--capture-range=cudaProfilerApi --capture-range-end=stop python $TRAIN_PATH/deepy.py \
+$TRAIN_PATH/train.py --conf_dir configs <config files>
+```
+
+The generated output file can then by viewed with the Nsight Systems GUI:
+
+![Alt text](images/nsight_profiling.png)
+
+## PyTorch Profiling
+
+To use the built-in PyTorch profiler, set config options `profile`, `profile_step_start`, and `profile_step_stop`.
+
+The PyTorch profiler will save traces to your `tensorboard` log directory.  You can view these traces within
+TensorBoard by following the steps [here](https://pytorch.org/tutorials/intermediate/tensorboard_profiler_tutorial.html).
+
+![Alt text](images/pytorch_profiling.png)
+
+## PyTorch Memory Profiling
+
+To use PyTorch Memory Profiling, set config options `memory_profiling` and `memory_profiling_path`.
+
+![Alt text](images/memory_profiling.png)
+
+View the generated profile with the [memory_viz.py](https://github.com/pytorch/pytorch/blob/main/torch/cuda/_memory_viz.py) script. Run with:
+
+```
+python _memory_viz.py trace_plot <generated_profile> -o trace.html
+```
 
 # Adoption and Publications
 
@@ -556,55 +724,73 @@ EleutherAI and our collaborators have used it in the following publications:
  - Kshitij Gupta, Benjamin Thérien, Adam Ibrahim, Mats Leon Richter, **Quentin Anthony**, Eugene Belilovsky, Irina Rish, and Timothée Lesort. "[Continual Pre-Training of Large Language Models: How to re-warm your model?](https://arxiv.org/abs/2308.04014)" In _Workshop on Efficient Systems for Foundation Models @ ICML_, 2023.
  - **Zhangir Azerbayev**, **Hailey Schoelkopf**, Keiran Paster, Marco Dos Santos, Stephen McAleer, Albert Q Jiang, Jia Deng, **Stella Biderman**, and Sean Welleck. "[Llemma: An open language model for mathematics]([https://arxiv.org/abs/2308.04014](https://arxiv.org/abs/2310.10631))" In _Math-AI Workshop @ NeurIPS_, 2023.
  - Alexander Havrilla, Maksym Zhuravinskyi, Duy Phung, Aman Tiwari, Jonathan Tow, **Stella Biderman**, **Quentin Anthony**, and **Louis Castricato**. "[trlX: A Framework for Large Scale Reinforcement Learning from Human Feedback](https://aclanthology.org/2023.emnlp-main.530/)." In _Proceedings of the 2023 Conference on Empirical Methods in Natural Language Processing_, 2023.
+ -  **Quentin Anthony**, **Jacob Hatef**, Deepak Narayanan, **Stella Biderman**, Stas Bekman, Junqi Yin, Aamir Shafi, Hari Subramoni, and Dhabaleswar Panda. "[The Case for Co-Designing Model Architectures with Hardware](https://arxiv.org/abs/2401.14489)." In _arXiv preprint_, 2024.
+ - Adam Ibrahim, Benjamin Thérien, Kshitij Gupta, Mats L. Richter, **Quentin Anthony**, Timothée Lesort, Eugene Belilovsky, Irina Rish. "[Simple and Scalable Strategies to Continually Pre-train Large Language Models](https://arxiv.org/abs/2403.08763)." In _arXiv preprint_, 2024.
+ - Junqi Yin, Avishek Bose, Guojing Cong, Isaac Lyngaas, **Quentin Anthony**. "[Comparative Study of Large Language Model Architectures on Frontier](https://arxiv.org/abs/2402.00691)." In _arXiv preprint_, 2024.
 
 The following publications by other research groups use this library:
-- Ta-Chung Chi, Ting-Han Fan, Peter J. Ramadge, and Alexander Rudnicky. "[KERPLE: Kernelized Relative Positional Embedding for Length Extrapolation](https://arxiv.org/abs/2205.09921)." In *Advances in Neural Information Processing Systems* 35 (2022).
+- Ta-Chung Chi, Ting-Han Fan, Peter J. Ramadge, and Alexander Rudnicky. "[KERPLE: Kernelized Relative Positional Embedding for Length Extrapolation](https://arxiv.org/abs/2205.09921)." In *Advances in Neural Information Processing Systems* 35, 2022.
 - Sameera Horawalavithana, Ellyn Ayton, Shivam Sharma, Scott Howland, Megha Subramanian, Scott Vasquez, Robin Cosbey, Maria Glenski, and Svitlana Volkova. "[Foundation Models of Scientific Knowledge for Chemistry: Opportunities, Challenges and Lessons Learned](https://aclanthology.org/2022.bigscience-1.12/)." In *Proceedings of the ACL Workshop on Challenges \& Perspectives in Creating Large Language Models*, 2022.
 - Sophia Kolak, Ruben Martins, Claire Le Goues, and Vincent J. Hellendoorn. "[Patch Generation with Language Models: Feasibility and Scaling Behavior](https://par.nsf.gov/biblio/10340618)"." In *Proceedings of the Deep Learning for Code Workshop at ICLR*, 2022.
 - Frank F. Xu, Uri Alon, Graham Neubig, and Vincent J. Hellendoorn. "[A Systematic Evaluation of Large Language Models of Code](https://arxiv.org/abs/2202.13169)." In *Proceedings of the ICLR Workshop on Deep Learning For Code*, 2022.
-- Eghbal A. Hosseini, Martin A. Schrimpf, Yian Zhang, Samuel Bowman, Noga Zaslavsky, and Evelina Fedorenko. "[Artificial neural network language models align neurally and behaviorally with humans even after a developmentally realistic amount of training.](https://www.biorxiv.org/content/10.1101/2022.10.04.510681)" _BioRxiv_, 2022.
 - Byung-Doh Oh and William Schuler. "[Transformer-Based LM Surprisal Predicts Human Reading Times Best with About Two Billion Training Tokens](https://arxiv.org/abs/2304.11389)." In *Findings of the Association for Computational Linguistics*, 2023.
 - Ta-Chung Chi, Ting-Han Fan, Alexander Rudnicky, and Peter Ramadge. "[Dissecting Transformer Length Extrapolation via the Lens of Receptive Field Analysis](https://aclanthology.org/2023.acl-long.756/)." In _Proceedings of the 61st Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers)_, pp. 13522-13537, 2023.
-- Ta-Chung Chi, Ting-Han Fan, Li-Wei Chen, Alexander Rudnicky, and Peter Ramadge. "[Latent Positional Information is in the Self-Attention Variance of Transformer Language Models Without Positional Embeddings](https://aclanthology.org/2023.acl-short.102/)." In _Proceedings of the 61st Annual Meeting of the Association for Computational Linguistics (Volume 2: Short Papers)_, pp. 13522-13537 (2023).
+- Ta-Chung Chi, Ting-Han Fan, Li-Wei Chen, Alexander Rudnicky, and Peter Ramadge. "[Latent Positional Information is in the Self-Attention Variance of Transformer Language Models Without Positional Embeddings](https://aclanthology.org/2023.acl-short.102/)." In _Proceedings of the 61st Annual Meeting of the Association for Computational Linguistics (Volume 2: Short Papers)_, pp. 13522-13537, 2023.
 - Xidong Feng, Yicheng Luo, Ziyan Wang, Hongrui Tang, Mengyue Yang, Kun Shao, David Mguni, Yali Du, and Jun Wang. "[ChessGPT: Bridging Policy Learning and Language Modeling.](https://arxiv.org/abs/2306.09200)" _arXiv preprint arXiv:2306.09200_, 2023.
 - Orion Walker Dollar, Sameera Horawalavithana, Scott Vasquez, W. James Pfaendtner, and Svitlana Volkova. "[MolJET: Multimodal Joint Embedding Transformer for Conditional de novo Molecular Design and Multi-Property Optimization.](https://openreview.net/pdf?id=7UudBVsIrr)" _preprint under review_, 2023.
 - Jean Kaddour and Qi Liu. "[Text Data Augmentation in Low-Resource Settings via Fine-Tuning of Large Language Models](https://arxiv.org/abs/2310.01119)." _arXiv:2310.01119_, 2023.
 - Alon Albalak, Liangming Pan, Colin Raffel, and William Yang Wang. "[Efficient Online Data Mixing For Language Model Pre-Training](https://arxiv.org/abs/2312.02406)." In _NeurIPS Workshop on R0-FoMo: Robustness of Few-shot and Zero-shot Learning in Large Foundation Models_, 2023.
-- Eghbal A. Hosseini and Evelina Fedorenko. "[Large language models implicitly learn to straighten neural sentence trajectories to construct a predictive representation of natural language](https://www.biorxiv.org/content/10.1101/2023.11.05.564832v1)." _bioRxiv_, 2023.
-- Junqi Yin, Sajal Dash, Feiyi Wang, and Mallikarjun Shankar. "[FORGE: Pre-Training Open Foundation Models for Science](https://dl.acm.org/doi/abs/10.1145/3581784.3613215). _Proceedings of the International Conference for High Performance Computing, Networking, Storage and Analysis_, 1-13, 2023.
-- Jean Kaddour and Qi Liu. "[Text Data Augmentation in Low-Resource Settings via Fine-Tuning of Large Language Models](https://arxiv.org/abs/2310.01119)." _arXiv preprint arXiv:2310.01119_, 2023.
-- Peng Di, Jianguo Li, Hang Yu, Wei Jiang, Wenting Cai, Yang Cao, Chaoyu Chen, Dajun Chen, Hongwei Chen, Liang Chen, Gang Fan, Jie Gong, Zi Gong, Wen Hu, Tingting Guo, Zhichao Lei, Ting Li, Zheng Li, Ming Liang, Cong Liao, Bingchang Liu, Jiachen Liu, Zhiwei Liu, Shaojun Lu, Min Shen, Guangpei Wang, Huan Wang, Zhi Wang, Zhaogui Xu, Jiawei Yang, Qing Ye, Gehao Zhang, Yu Zhang, Zelin Zhao, Xunjin Zheng, Hailian Zhou, Lifu Zhu, and Xianying Zhu. "[CodeFuse-13B: A Pretrained Multi-lingual Code Large Language Model](https://arxiv.org/abs/2310.06266)." _arXiv preprint arXiv:2310.06266_, 2023.
-- Nikitha Rao, Kush Jain, Uri Alon, Claire Le Goues, and Vincent J Hellendoorn. "[CAT-LM Training Language Models on Aligned Code And Tests](https://arxiv.org/abs/2310.01602)." _38th IEEE/ACM International Conference on Automated Software Engineering (ASE)_, pp. 409-420. IEEE, 2023.
+- Eghbal A. Hosseini and Evelina Fedorenko. "[Large language models implicitly learn to straighten neural sentence trajectories to construct a predictive representation of natural language](https://www.biorxiv.org/content/10.1101/2023.11.05.564832v1)." In _Neural Information Processing Systems_, 2023.
+- Junqi Yin, Sajal Dash, Feiyi Wang, and Mallikarjun Shankar. "[FORGE: Pre-Training Open Foundation Models for Science](https://dl.acm.org/doi/abs/10.1145/3581784.3613215). In _Proceedings of the International Conference for High Performance Computing, Networking, Storage and Analysis_, 1-13, 2023.
+- Jean Kaddour and Qi Liu. "[Text Data Augmentation in Low-Resource Settings via Fine-Tuning of Large Language Models](https://arxiv.org/abs/2310.01119)." In _arXiv preprint arXiv:2310.01119_, 2023.
+- Peng Di, Jianguo Li, Hang Yu, Wei Jiang, Wenting Cai, Yang Cao, Chaoyu Chen, Dajun Chen, Hongwei Chen, Liang Chen, Gang Fan, Jie Gong, Zi Gong, Wen Hu, Tingting Guo, Zhichao Lei, Ting Li, Zheng Li, Ming Liang, Cong Liao, Bingchang Liu, Jiachen Liu, Zhiwei Liu, Shaojun Lu, Min Shen, Guangpei Wang, Huan Wang, Zhi Wang, Zhaogui Xu, Jiawei Yang, Qing Ye, Gehao Zhang, Yu Zhang, Zelin Zhao, Xunjin Zheng, Hailian Zhou, Lifu Zhu, and Xianying Zhu. "[CodeFuse-13B: A Pretrained Multi-lingual Code Large Language Model](https://arxiv.org/abs/2310.06266)." In _arXiv preprint arXiv:2310.06266_, 2023.
+- Nikitha Rao, Kush Jain, Uri Alon, Claire Le Goues, and Vincent J Hellendoorn. "[CAT-LM Training Language Models on Aligned Code And Tests](https://arxiv.org/abs/2310.01602)." In _38th IEEE/ACM International Conference on Automated Software Engineering (ASE)_, pp. 409-420. IEEE, 2023.
+- Pratyush Patel, Esha Choukse, Chaojie Zhang, Íñigo Goiri, Brijesh Warrier, Nithish Mahalingam, Ricardo Bianchini. "[POLCA: Power Oversubscription in LLM Cloud Providers](https://arxiv.org/abs/2308.12908)." In _arXiv preprint_, 2023.
+- Junqi Yin, Sajal Dash, John Gounley, Feiyi Wang, and Georgia Tourassi. "[Evaluation of pre-training large language models on leadership-class supercomputers](https://link.springer.com/article/10.1007/s11227-023-05479-7)." In _the Journal of Supercomputing_ 79, no. 18, 2023.
+- Tal Kadosh, Niranjan Hasabnis, Vy A. Vo, Nadav Schneider, Neva Krien, Mihai Capota, Abdul Wasay, Nesreen Ahmed, Ted Willke, Guy Tamir, Yuval Pinter, Timothy Mattson, and Gal Oren. "[Domain-Specific Code Language Models: Unraveling the Potential for HPC Codes and Tasks](https://arxiv.org/abs/2312.13322)." In _arXiv preprint_, 2023.
+- Guobin Shen, Dongcheng Zhao, Yiting Dong, Yang Li, Jindong Li, Kang Sun, and Yi Zeng. "[Astrocyte-Enabled Advancements in Spiking Neural Networks for Large Language Modeling](https://arxiv.org/abs/2312.07625)." In _arXiv preprint_, 2023.
+- Eghbal A. Hosseini, Martin A. Schrimpf, Yian Zhang, Samuel Bowman, Noga Zaslavsky, and Evelina Fedorenko. "[Artificial neural network language models align neurally and behaviorally with humans even after a developmentally realistic amount of training.](https://www.biorxiv.org/content/10.1101/2022.10.04.510681)" In _Neurobiology of Language_, 2024.
+- Xiongye Xiao, Chenyu Zhou, Heng Ping, Defu Cao, Yaxing Li, Yizhuo Zhou, Shixuan Li, and Paul Bogdan. "[Exploring Neuron Interactions and Emergence in LLMs: From the Multifractal Analysis Perspective](https://arxiv.org/abs/2402.09099)." In _arXiv preprint_, 2024.
+- Zhiyuan Zeng, Qipeng Guo, Zhaoye Fei, Zhangyue Yin, Yunhua Zhou, Linyang Li, Tianxiang Sun, Hang Yan, Dahua Lin, and Xipeng Qiu. "[Turn Waste into Worth: Rectifying Top-k Router of MoE](https://arxiv.org/abs/2402.12399)." In _arXiv preprint_, 2024.
 
 ## Models
 The following models were trained using this library:
 
 ### English LLMs
-- EleutherAI's [GPT-NeoX-20B](https://huggingface.co/EleutherAI/gpt-neox-20b), [Pythia (70M through 13B)](https://github.com/EleutherAI/pythia), and [LLeMMA (34B)](https://arxiv.org/abs/2310.10631)
+- EleutherAI's [GPT-NeoX-20B](https://huggingface.co/EleutherAI/gpt-neox-20b) and [Pythia (70M through 13B)](https://github.com/EleutherAI/pythia)
 - CarperAI's [FIM-NeoX-1.3B](https://huggingface.co/CarperAI/FIM-NeoX-1.3B)
 - StabilityAI's [StableLM (3B and 7B)](https://github.com/Stability-AI/StableLM)
 - Together.ai's [RedPajama-INCITE (3B and 7B)](https://together.ai/blog/redpajama-models-v1)
 - Carnegie Mellon University's [proofGPT (1.3B and 6.7B)](https://huggingface.co/hoskinson-center/proofGPT-v0.1-6.7B)
 - Dampish's [StellarX (2.8B and 4B)](https://huggingface.co/Dampish/StellarX-4B-V0.2)
-- Oak Ridge National Lab's [FORGE (26B)](https://github.com/at-aaims/forge)
+- Chinese Academy of Sciences's [AstroSNN (1.5B)](https://arxiv.org/abs/2312.07625)
 
 ### Non-English LLMs
 - EleutherAI's [Polyglot-Ko (1.3B through 12.8B)](https://github.com/EleutherAI/polyglot) (Korean)
 - Korea University's [KULLM-Polyglot (5.8B and 12.8B)](https://github.com/nlpai-lab/KULLM) (Korean)
-- Stability AI's [Japanese Stable LM (7B)](https://huggingface.co/stabilityai/japanese-stablelm-base-alpha-7b)
+- Stability AI's [Japanese Stable LM (7B)](https://huggingface.co/stabilityai/japanese-stablelm-base-alpha-7b) (Japanese)
 - LearnItAnyway's [LLaVA-Polyglot-Ko (1.3B)](https://huggingface.co/LearnItAnyway/llava-polyglot-ko-1.3b-hf) (Korean)
 - Rinna Co.'s [japanese-gpt-neox-3.6b](https://huggingface.co/rinna/japanese-gpt-neox-3.6b) (Japanese) and [bilingual-gpt-neox-4b](https://huggingface.co/rinna/bilingual-gpt-neox-4b) (English / Japanese)
 - CyberAgent's [Open-CLM (125M through 7B)](https://huggingface.co/cyberagent/open-calm-7b) (Japanese)
 - The Hungarian Research Centre for Linguistics's [PULI GPTrio (6.7B)](https://huggingface.co/NYTK/PULI-GPTrio) (Hungarian / English / Chinese)
 - The University of Tokyo's [weblab-10b](https://huggingface.co/Kojima777/weblab-10b) and [weblab-10b-instruct](https://huggingface.co/Kojima777/weblab-10b-instruction-sft) (Japanese)
 - nolando.ai's [Hi-NOLIN (9B)](https://blog.nolano.ai/Hi-NOLIN/) (English, Hindi)
+- Renmin University of China's [YuLan (12B)](https://huggingface.co/yulan-team/YuLan-Base-12b) (English, Chinese)
+- The Basque Center for Language Technology's [Latixna (70B)](https://huggingface.co/HiTZ/latxa-70b-v1.2) (Basque)
 
 ### Code Models
 - Carnegie Mellon University's [PolyCoder (160M through 2.7B)](https://github.com/VHellendoorn/Code-LMs) and [CAT-LM (2.7B)](https://huggingface.co/nikitharao/catlm)
 - StabilityAI's [StableCode (1.3B)](https://stability.ai/blog/stablecode-llm-generative-ai-coding) and [StableCode-Completion-Alpha (3B)](https://stability.ai/blog/stablecode-llm-generative-ai-coding)
 - CodeFuse AI's [CodeFuse (13B)](https://huggingface.co/codefuse-ai/CodeFuse-13B)
 
+### AI for Science
+- EleutherAI's [LLeMMA (34B)](https://arxiv.org/abs/2310.10631)
+- Oak Ridge National Lab's [FORGE (26B)](https://github.com/at-aaims/forge)
+- Oak Ridge National Lab's [Unnamed Material Science Domain Models (7B)](https://arxiv.org/abs/2402.00691)
+- Pacific Northwest National Lab's [MolJet (undisclosed size)](https://openreview.net/pdf?id=7UudBVsIrr)
+
 ### Other Modalities
+-  Rinna Co.'s [PSLM (7B)](https://arxiv.org/abs/2406.12428) (speech / text)
 -  University College London's [ChessGPT-3B](https://huggingface.co/Waterhorse/chessgpt-base-v1)
 -  Gretel's [Text-to-Table (3B)](https://huggingface.co/gretelai/text2table)
 

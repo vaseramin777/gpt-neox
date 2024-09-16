@@ -64,7 +64,7 @@ def report_memory(name):
     print_rank_0(string)
 
 
-def get_attn_mask(seq_length, device):
+def get_attn_mask(seq_length, device, sliding_window_width):
     """
     Get triangular attention mask for a given sequence length / device.
     """
@@ -72,6 +72,9 @@ def get_attn_mask(seq_length, device):
     mask = torch.tril(torch.ones((1, seq_length, seq_length), device=device)).view(
         1, 1, seq_length, seq_length
     )
+    # get rid of lower diagonals than the sliding window width, if a value was provided
+    if sliding_window_width is not None:
+        mask = torch.triu(mask, diagonal=-sliding_window_width)
 
     # convert to binary
     return mask < 0.5
@@ -81,6 +84,7 @@ def get_ltor_masks_and_position_ids(
     data,
     eod_token,
     eod_mask_loss=False,
+    sliding_window_width=None,
 ):
     """Build masks and position id for left to right model."""
 
@@ -91,6 +95,7 @@ def get_ltor_masks_and_position_ids(
     attention_mask = get_attn_mask(
         seq_length=seq_length,
         device=data.device,
+        sliding_window_width=sliding_window_width,
     )
 
     # Loss mask.
@@ -270,10 +275,11 @@ class Timer:
 class Timers:
     """Group of timers."""
 
-    def __init__(self, use_wandb, tensorboard_writer):
+    def __init__(self, use_wandb, tensorboard_writer, comet_experiment):
         self.timers = {}
         self.use_wandb = use_wandb
         self.tensorboard_writer = tensorboard_writer
+        self.comet_experiment = comet_experiment
 
     def __call__(self, name):
         if name not in self.timers:
@@ -294,6 +300,14 @@ class Timers:
 
             if self.use_wandb:
                 wandb.log({f"timers/{name}": value}, step=iteration)
+
+            if self.comet_experiment:
+                self.comet_experiment.__internal_api__log_metric__(
+                    f"timers/{name}",
+                    value,
+                    framework="gpt-neox",
+                    step=iteration,
+                )
 
     def log(self, names, normalizer=1.0, reset=True):
         """Log a group of timers."""
@@ -444,7 +458,7 @@ def setup_for_inference_or_eval(use_cache=True, overwrite_values=None, input_arg
     initialize_megatron(neox_args)
 
     # set up model and load checkpoint.
-    model, _, _ = setup_model_and_optimizer(
+    model, _, _, _ = setup_model_and_optimizer(
         neox_args=neox_args,
         use_cache=use_cache,
         iteration=neox_args.iteration,

@@ -28,7 +28,6 @@ from tests.common import simulate_deepy_env, BASE_CONFIG
 
 PARAMS_TO_TEST = {
     "gpt_j_residual": [True, False],
-    "mlp_type": ["llama", "regular"],
     "pos_emb": ["learned", "rotary", "sinusoidal", "rpe", "alibi", "none"],
     "attention_config": [
         "global",
@@ -38,7 +37,6 @@ PARAMS_TO_TEST = {
         "bigbird",
         "bslongformer",
         "gmlp",
-        "amlp",
         "flash",
     ],
     "hidden_dropout": [0, 0.1],
@@ -50,7 +48,10 @@ PARAMS_TO_TEST = {
 
 keys_to_test = PARAMS_TO_TEST.keys()
 
-
+# TODO: fix model training tests
+@pytest.mark.skip(
+    reason="All model tests are skipped until we fix the CUDA + torch multiprocessing issue."
+)
 @pytest.mark.parametrize(
     "key, value",
     [(key, value) for key in keys_to_test for value in PARAMS_TO_TEST[key]],

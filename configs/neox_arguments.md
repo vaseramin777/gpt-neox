@@ -111,7 +111,7 @@ Logging Arguments
 
 - **git_hash**: str
 
-    Default = 78b8466
+    Default = 217b4c5
 
     current git hash of repository
 
@@ -199,6 +199,54 @@ Logging Arguments
 
 
 
+- **memory_profiling**: bool
+
+    Default = False
+
+    Whether to take a memory snapshot of the model. Useful for debugging memory issues.
+
+
+
+- **memory_profiling_path**: str
+
+    Default = None
+
+    Path to save memory snapshot to.
+
+
+
+- **profile**: bool
+
+    Default = False
+
+    Enable nsys profiling. When using this option,
+    nsys options should be specified in commandline.
+    An example nsys commandline is
+    ```
+    nsys profile -s none -t nvtx,cuda -o <path/to/output_file>
+    --force-overwrite true
+    --capture-range=cudaProfilerApi
+    --capture-range-end=stop
+    ```
+
+
+
+- **profile_step_start**: int
+
+    Default = 10
+
+    Step to start profiling at.
+
+
+
+- **profile_step_stop**: int
+
+    Default = 12
+
+    Step to stop profiling at.
+
+
+
 ## NeoXArgsModel
 
 Model Arguments
@@ -229,11 +277,37 @@ Model Arguments
 
 
 
+- **intermediate_size**: int
+
+    Default = None
+
+    Transformer intermediate size. Currently only used for "mlp_type": "llama".
+
+    If not passed, will be set to a reasonable default.
+
+
+
 - **num_attention_heads**: int
 
     Default = None
 
     Number of transformer attention heads.
+
+    If num_kv_heads is set, will control only number of query heads.
+
+
+
+- **num_kv_heads**: int
+
+    Default = None
+
+    Number of transformer key/value attention heads.
+
+    If set to None or the same value as num_attention_heads, will perform multi-head attention (MHA).
+    If set to < num_attention_heads but > 1, will perform grouped-query attention (GQA) (https://arxiv.org/pdf/2305.13245.pdf)
+    If set to 1, will perform multi-query attention.
+
+    Must be < num_attention_heads and divide num_attention_heads evenly.
 
 
 
@@ -245,6 +319,14 @@ Model Arguments
 
 
 
+- **sliding_window_width**: int
+
+    Default = None
+
+    Width of the attention sliding window. Only supported with Flash Attention 2.
+
+
+
 - **max_position_embeddings**: int
 
     Default = None
@@ -253,11 +335,11 @@ Model Arguments
 
 
 
-- **norm**: typing.Literal['layernorm', 'rmsnorm', 'scalenorm']
+- **norm**: typing.Literal['layernorm', 'rmsnorm', 'scalenorm', 'te_rmsnorm', 'te_layernorm']
 
     Default = layernorm
 
-    Normalization layer to use. Choose from "layernorm", "rmsnorm", "scalenorm".
+    Normalization layer to use. Choose from "layernorm", "rmsnorm", "scalenorm", "te_rmsnorm", "te_layernorm".
 
 
 
@@ -350,7 +432,7 @@ Model Arguments
     The first item in the list specifies the attention type(s), and should be a list of strings. The second item
     specifies the number of times to repeat those attention types in the full list.
 
-    attention type choices:  [global, local, sparse_fixed, sparse_variable, bslongformer, bigbird, "gmlp", "amlp", "flash"]
+    attention type choices:  [global, local, sparse_fixed, sparse_variable, bslongformer, bigbird, "gmlp", "amlp", "flash", "mamba", "rwkv"]
 
     So a 12 layer network with only global attention could be specified like:
         [[[`global`], 12]]
@@ -519,7 +601,19 @@ Model Arguments
 
 
 
-- **init_method**: typing.Literal['normal', 'scaled_normal', 'orthogonal', 'scaled_orthogonal', 'xavier_uniform', 'xavier_normal', 'wang_init', 'small_init']
+- **rotary_save_freqs_buffer**: bool
+
+    Default = False
+
+    Used to control whether the `inv_freqs` buffer in rotary embeddings
+    will be stored in checkpoints (persistent=True) or not.
+
+    Defaults to false, but is left configurable to maintain backward-compatibility
+    with GPT-NeoX checkpoints that were trained with this flag.
+
+
+
+- **init_method**: typing.Literal['normal', 'scaled_normal', 'orthogonal', 'scaled_orthogonal', 'xavier_uniform', 'xavier_normal', 'wang_init', 'small_init', 'single_residual_scaled_normal']
 
     Default = normal
 
@@ -528,7 +622,7 @@ Model Arguments
 
 
 
-- **output_layer_init_method**: typing.Literal['normal', 'scaled_normal', 'orthogonal', 'scaled_orthogonal', 'xavier_uniform', 'xavier_normal', 'wang_init', 'small_init']
+- **output_layer_init_method**: typing.Literal['normal', 'scaled_normal', 'orthogonal', 'scaled_orthogonal', 'xavier_uniform', 'xavier_normal', 'wang_init', 'small_init', 'single_residual_scaled_normal']
 
     Default = scaled_normal
 
@@ -608,6 +702,55 @@ Model Arguments
         'num_tokens': int = 10 # length of the soft prompt in tokens
         'init_string': str = '' # if provided, initialize the soft prompt with the word embeddings of this string
         'init_range': float = 0.5 # if no init string is provided, initialize the soft prompt with a uniform distribution between -init_range and init_rang
+
+
+
+- **mamba_selective_scan_fusion**: bool
+
+    Default = False
+
+    Enable fused kernels for Mamba selective scan.
+
+
+
+- **mamba_causal_conv_fusion**: bool
+
+    Default = False
+
+    Enable fused kernels for Mamba causal Conv1d.
+
+
+
+- **mamba_inner_func_fusion**: bool
+
+    Default = False
+
+    Enable fused inner operator for Mamba. (Supersedes conv. and selective scan fusion flags, requires each of those kernels to be installed.)
+
+
+
+- **mamba_selective_fp32_params**: bool
+
+    Default = True
+
+    Keep selected parameters in fp32 for Mamba (A and D).
+    Requires https://github.com/EleutherAI/DeeperSpeed/pull/61 .
+
+
+
+- **mamba_use_bias_in_conv**: bool
+
+    Default = True
+
+    If false, conv1d in mamba block will not have bias term
+
+
+
+- **mamba_use_bias_in_linears**: bool
+
+    Default = False
+
+    Enable bias terms in mamba block up- and down- projections (in_proj and out_proj).
 
 
 
@@ -913,6 +1056,24 @@ Parallelism Arguments
 
 
 
+- **sequence_parallel**: bool
+
+    Default = False
+
+    flag to determine whether Megatron-style Sequence Parallelism (https://arxiv.org/abs/2205.05198)
+    (Layernorm inputs and activations are sharded across model parallel group) will be used. Has no effect when model_parallel_size is 1.
+    **Set by user, in contrast to neox_args.is_pipe_parallel.**
+
+
+
+- **expert_interval**: int
+
+    Default = 2
+
+    Have one MoE layer every expert_interval layers
+
+
+
 ## NeoXArgsTemplate
 
 NeoXArgsTemplate()
@@ -1031,6 +1192,135 @@ Text Generation arguments
     Tasks to evaluate on using lm_eval_harness
 
     NOTE: Requires internet connection
+
+
+
+- **moe_top_k**: int
+
+    Default = 1
+
+    Activate top K experts in MoE
+
+
+
+- **use_tutel**: bool
+
+    Default = False
+
+    Use Tutel optimizations in MoE
+
+
+
+- **moe_num_experts**: int
+
+    Default = 1
+
+    Number of MoE experts
+
+
+
+- **moe_loss_coeff**: float
+
+    Default = 0.1
+
+    Coefficient for MoE loss
+
+
+
+- **moe_train_capacity_factor**: float
+
+    Default = 1.0
+
+    The capacity of the expert at train time
+
+
+
+- **moe_eval_capacity_factor**: float
+
+    Default = 1.0
+
+    The capacity of the expert at eval time
+
+
+
+- **moe_min_capacity**: int
+
+    Default = 4
+
+    The minimum capacity per expert regardless of the capacity_factor
+
+
+
+- **moe_token_dropping**: bool
+
+    Default = False
+
+    Whether to drop tokens when exceeding capacity
+
+
+
+- **create_moe_param_group**: bool
+
+    Default = True
+
+    Whether to create a separate parameter group for MoE parameters
+
+
+
+- **moe_use_residual**: bool
+
+    Default = True
+
+    Whether to use residual in MoE
+
+
+
+- **moe_expert_parallel_size**: int
+
+    Default = 1
+
+    Number of parallel experts in MoE
+
+
+
+- **moe_type**: str
+
+    Default = megablocks
+
+    Either `deepspeed` or `megablocks`
+
+
+
+- **moe_glu**: bool
+
+    Default = False
+
+    Use gated linear units in MoE
+
+
+
+- **moe_lbl_in_fp32**: bool
+
+    Default = False
+
+    Whether to compute the load balancing loss in fp32.
+
+
+
+- **moe_jitter_eps**: float
+
+    Default = None
+
+    Coefficient for MoE routing jitter. Jitter is
+    not used if set to None
+
+
+
+- **enable_expert_tensor_parallelism**: bool
+
+    Default = False
+
+    Enable expert tensor parallelism
 
 
 
@@ -1478,14 +1768,6 @@ Training Arguments
 
 
 
-- **gas**: int
-
-    Default = None
-
-    gradient_accumulation_steps
-
-
-
 - **clip_grad**: float
 
     Default = 1.0
@@ -1734,7 +2016,9 @@ Args for deepspeed config
 
     Default = None
 
-    Configuration for using bfloat16 floating-point format as an alternative to FP16. BFLOAT16 requires hardware support (e.g., NVIDIA A100). Dictionary options as described in Deepspeed documentation: https://www.deepspeed.ai/docs/config-json/#bfloat16-training-options
+    Configuration for using bfloat16 floating-point format as an alternative to FP16. BFLOAT16 requires hardware support (e.g., NVIDIA A100).
+
+    Dictionary options as described in Deepspeed documentation: https://www.deepspeed.ai/docs/config-json/#bfloat16-training-options
 
 
 
